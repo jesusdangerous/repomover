@@ -33,7 +33,7 @@ type GitLabPR struct {
 	Description  string `json:"description"`
 }
 
-func CreatePR(repo *git.Repository, platform string, token string) error {
+func CreatePR(ctx context.Context, repo *git.Repository, platform string, token string) error {
 
 	if token == "" {
 		if platform == "github" {
@@ -46,6 +46,7 @@ func CreatePR(repo *git.Repository, platform string, token string) error {
 		}
 	}
 
+	// Resolve current branch via go-git.
 	head, err := repo.Head()
 	if err != nil {
 		return err
@@ -92,7 +93,7 @@ func CreatePR(repo *git.Repository, platform string, token string) error {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewBuffer(jsonData))
@@ -155,6 +156,7 @@ func getRemoteURL(repo *git.Repository) (string, error) {
 func parseOwnerRepo(remoteURL string) (string, string, error) {
 	trimmed := strings.TrimSpace(strings.TrimSuffix(remoteURL, ".git"))
 
+	// SSH short syntax: git@host:owner/repo
 	if strings.Contains(trimmed, "@") && strings.Contains(trimmed, ":") && !strings.Contains(trimmed, "://") {
 		parts := strings.SplitN(trimmed, ":", 2)
 		if len(parts) != 2 {

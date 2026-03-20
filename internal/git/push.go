@@ -12,7 +12,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
 )
 
-func Push(repo *git.Repository, platform string, token string) error {
+func Push(ctx context.Context, repo *git.Repository, platform string, token string) error {
 
 	if token == "" {
 		switch platform {
@@ -50,8 +50,8 @@ func Push(repo *git.Repository, platform string, token string) error {
 
 	var lastErr error
 	for attempt := 1; attempt <= 3; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		err := repo.PushContext(ctx, options)
+		attemptCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		err := repo.PushContext(attemptCtx, options)
 		cancel()
 
 		if err == nil || err == git.NoErrAlreadyUpToDate {
