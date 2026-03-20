@@ -9,11 +9,6 @@ It supports:
 - GitHub and GitLab for remote operations
 - HTTPS token and SSH auth for Git clone/push
 
-## Requirements
-
-- Go 1.25+
-- Git repositories accessible from your machine
-
 Authentication options:
 
 - HTTPS + token:
