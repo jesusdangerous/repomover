@@ -12,8 +12,10 @@ var cfg syncpkg.Config
 var logLevel string
 
 var rootCmd = &cobra.Command{
-	Use:   "repomover",
-	Short: "Repository synchronization tool",
+	Use:           "repomover",
+	Short:         "Repository synchronization tool",
+	SilenceUsage:  true,
+	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logging.Init(logLevel)
 
@@ -57,5 +59,5 @@ func init() {
 	flags.BoolVar(&cfg.SourceLocal, "source-local", false, "Treat --source as local filesystem path")
 	flags.BoolVar(&cfg.TargetLocal, "target-local", false, "Treat --target as local repository path")
 
-	flags.StringVar(&logLevel, "log-level", "info", "Log level: debug, info, warn, error")
+	flags.StringVar(&logLevel, "log-level", "warn", "Log level: debug, info, warn, error")
 }

@@ -98,10 +98,10 @@ func defaultLogger(level string) *slog.Logger {
 
 	format := strings.ToLower(strings.TrimSpace(os.Getenv("REPOMOVER_LOG_FORMAT")))
 	if format == "json" {
-		return slog.New(slog.NewJSONHandler(os.Stdout, opts))
+		return slog.New(slog.NewJSONHandler(os.Stderr, opts))
 	}
 
-	return slog.New(slog.NewTextHandler(os.Stdout, opts))
+	return slog.New(slog.NewTextHandler(os.Stderr, opts))
 }
 
 func parseLevel(level string) slog.Level {

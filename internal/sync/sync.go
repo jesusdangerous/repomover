@@ -43,17 +43,12 @@ func Run(cfg Config) error {
 		return fmt.Errorf("required flags are missing: --source, --target, --path")
 	}
 
-	action := strings.TrimSpace(cfg.Action)
-	if action == "" {
-		if cfg.Commit {
-			action = "commit"
-		} else {
-			action = "local"
-		}
+	action := strings.TrimSpace(strings.ToLower(cfg.Action))
+	if cfg.Commit {
+		action = "commit"
 	}
-
-	if cfg.Commit && action != "commit" {
-		return fmt.Errorf("conflicting flags: --commit cannot be used with --action=%s", action)
+	if action == "" {
+		action = "local"
 	}
 
 	if action != "local" && action != "commit" && action != "pr" {
@@ -99,7 +94,7 @@ func Run(cfg Config) error {
 			return err
 		}
 		cleanup = append(cleanup, func() { _ = os.RemoveAll(sourceDir) })
-		logging.InfoAttrs(ctx, "Cloning source repository", slog.String("source", cfg.Source))
+		logging.DebugAttrs(ctx, "Cloning source repository", slog.String("source", cfg.Source))
 		cloneAuthCfg := authCfg
 		cloneAuthCfg.Platform = ""
 		_, err = gitpkg.CloneOrInit(cfg.Source, sourceDir, cloneAuthCfg)
@@ -109,8 +104,11 @@ func Run(cfg Config) error {
 		src = filepath.Join(sourceDir, cfg.Path)
 	}
 
-	if cfg.TargetLocal {
-		logging.InfoAttrs(ctx, "Using local target repository", slog.String("target", cfg.Target))
+	if action == "local" {
+		if !cfg.TargetLocal {
+			return fmt.Errorf("cannot use action=local with remote target: use --target-local for local repository path")
+		}
+		logging.DebugAttrs(ctx, "Using local target repository", slog.String("target", cfg.Target))
 		var err error
 		repo, err = git.PlainOpen(cfg.Target)
 		if err != nil {
@@ -118,19 +116,28 @@ func Run(cfg Config) error {
 		}
 		worktreeDir = cfg.Target
 	} else {
-		targetDir, err := os.MkdirTemp("", "repomover-target-*")
-		if err != nil {
-			return err
+		if cfg.TargetLocal {
+			var err error
+			repo, err = git.PlainOpen(cfg.Target)
+			if err != nil {
+				return err
+			}
+			worktreeDir = cfg.Target
+		} else {
+			targetDir, err := os.MkdirTemp("", "repomover-target-*")
+			if err != nil {
+				return err
+			}
+			cleanup = append(cleanup, func() { _ = os.RemoveAll(targetDir) })
+			logging.DebugAttrs(ctx, "Cloning target repository", slog.String("target", cfg.Target))
+			cloneAuthCfg := authCfg
+			cloneAuthCfg.Platform = ""
+			repo, err = gitpkg.CloneOrInit(cfg.Target, targetDir, cloneAuthCfg)
+			if err != nil {
+				return err
+			}
+			worktreeDir = targetDir
 		}
-		cleanup = append(cleanup, func() { _ = os.RemoveAll(targetDir) })
-		logging.InfoAttrs(ctx, "Cloning target repository", slog.String("target", cfg.Target))
-		cloneAuthCfg := authCfg
-		cloneAuthCfg.Platform = ""
-		repo, err = gitpkg.CloneOrInit(cfg.Target, targetDir, cloneAuthCfg)
-		if err != nil {
-			return err
-		}
-		worktreeDir = targetDir
 	}
 
 	dstPath := cfg.DestPath
@@ -139,7 +146,7 @@ func Run(cfg Config) error {
 	}
 	dst := filepath.Join(worktreeDir, dstPath)
 
-	logging.InfoAttrs(
+	logging.DebugAttrs(
 		ctx,
 		"Sync started",
 		slog.String("sourcePath", src),
@@ -162,8 +169,17 @@ func Run(cfg Config) error {
 	}
 
 	if cfg.DryRun {
-		logging.InfoAttrs(ctx, "Dry run completed", slog.String("sourcePath", src), slog.String("destinationPath", dst))
+		logging.DebugAttrs(ctx, "Dry run validation complete", slog.String("sourcePath", src), slog.String("destinationPath", dst))
+		fmt.Fprintf(os.Stdout, "✓ Validation successful\n  Source: %s\n  Destination: %s\n", src, dst)
 		return nil
+	}
+
+	if action == "pr" {
+		logging.DebugCtx(ctx, "Creating branch for PR")
+		err := gitpkg.CreateBranch(repo, "repomover-sync")
+		if err != nil {
+			return err
+		}
 	}
 
 	var err error
@@ -182,33 +198,42 @@ func Run(cfg Config) error {
 	}
 
 	if !hasChanges {
-		logging.InfoCtx(ctx, "No changes detected")
+		logging.DebugCtx(ctx, "No changes detected")
 		return nil
 	}
 
 	if action == "local" {
 		logging.InfoAttrs(ctx, "Changes saved locally", slog.String("destinationPath", dst))
+		fmt.Fprintln(os.Stdout, "✓ Synced files to", dst)
 		return nil
 	}
 
-	logging.InfoCtx(ctx, "Creating commit")
+	logging.DebugCtx(ctx, "Creating commit")
 	err = gitpkg.Commit(repo, "repomover sync", dstPath)
 	if err != nil {
 		return err
 	}
 
 	if action == "commit" {
-		logging.InfoCtx(ctx, "Pushing changes")
-		return gitpkg.Push(ctx, repo, authCfg)
+		logging.DebugCtx(ctx, "Pushing changes")
+		err := gitpkg.Push(ctx, repo, authCfg)
+		if err == nil {
+			fmt.Fprintln(os.Stdout, "✓ Changes committed and pushed")
+		}
+		return err
 	} else if action == "pr" {
-		logging.InfoCtx(ctx, "Pushing changes before PR")
+		logging.DebugCtx(ctx, "Pushing changes before PR")
 		err = gitpkg.Push(ctx, repo, authCfg)
 		if err != nil {
 			return err
 		}
 
 		logging.InfoCtx(ctx, "Creating pull request")
-		return gitpkg.CreatePR(ctx, repo, cfg.Platform, cfg.Token)
+		err = gitpkg.CreatePR(ctx, repo, cfg.Platform, cfg.Token)
+		if err == nil {
+			fmt.Fprintln(os.Stdout, "✓ Pull request created: repomover-sync -> main")
+		}
+		return err
 	}
 
 	return nil
