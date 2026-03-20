@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -23,7 +26,11 @@ jobs:
 
       - name: Build
         run: |
-          GOOS=${{ matrix.os }} GOARCH=amd64 go build -o repomover-${{ matrix.os }}
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            GOOS=windows GOARCH=amd64 go build -o repomover-windows.exe
+          else
+            GOOS=${{ matrix.os }} GOARCH=amd64 go build -o repomover-${{ matrix.os }}
+          fi
 
       - name: Upload Release
         uses: softprops/action-gh-release@v1
