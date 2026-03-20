@@ -1,0 +1,275 @@
+package sync
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	neturl "net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/jesusdangerous/repomover/internal/fs"
+	gitpkg "github.com/jesusdangerous/repomover/internal/git"
+	"github.com/jesusdangerous/repomover/internal/logging"
+
+	git "github.com/go-git/go-git/v5"
+)
+
+type Config struct {
+	Source        string
+	Target        string
+	Path          string
+	DestPath      string
+	Commit        bool
+	DryRun        bool
+	Platform      string
+	Token         string
+	Action        string
+	Incremental   bool
+	SourceLocal   bool
+	TargetLocal   bool
+	SSHUser       string
+	SSHKeyPath    string
+	SSHPassphrase string
+}
+
+func Run(cfg Config) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	if strings.TrimSpace(cfg.Source) == "" || strings.TrimSpace(cfg.Target) == "" || strings.TrimSpace(cfg.Path) == "" {
+		return fmt.Errorf("required flags are missing: --source, --target, --path")
+	}
+
+	action := strings.TrimSpace(strings.ToLower(cfg.Action))
+	if cfg.Commit {
+		action = "commit"
+	}
+	if action == "" {
+		action = "local"
+	}
+
+	if action != "local" && action != "commit" && action != "pr" {
+		return fmt.Errorf("unsupported action: %s", action)
+	}
+
+	if action == "pr" {
+		if strings.TrimSpace(cfg.Platform) == "" {
+			cfg.Platform = detectPlatform(cfg.Target)
+		}
+
+		if cfg.Platform != "github" && cfg.Platform != "gitlab" {
+			return fmt.Errorf("unsupported platform: %s", cfg.Platform)
+		}
+	} else if strings.TrimSpace(cfg.Platform) != "" {
+		if cfg.Platform != "github" && cfg.Platform != "gitlab" {
+			return fmt.Errorf("unsupported platform: %s", cfg.Platform)
+		}
+	}
+
+	var src string
+	var repo *git.Repository
+	var worktreeDir string
+	cleanup := make([]func(), 0)
+	authCfg := gitpkg.AuthConfig{
+		Platform:         cfg.Platform,
+		Token:            cfg.Token,
+		SSHUser:          cfg.SSHUser,
+		SSHKeyPath:       cfg.SSHKeyPath,
+		SSHKeyPassphrase: cfg.SSHPassphrase,
+	}
+	defer func() {
+		for i := len(cleanup) - 1; i >= 0; i-- {
+			cleanup[i]()
+		}
+	}()
+
+	if cfg.SourceLocal {
+		src = filepath.Join(cfg.Source, cfg.Path)
+	} else {
+		sourceDir, err := os.MkdirTemp("", "repomover-source-*")
+		if err != nil {
+			return err
+		}
+		cleanup = append(cleanup, func() { _ = os.RemoveAll(sourceDir) })
+		logging.DebugAttrs(ctx, "Cloning source repository", slog.String("source", cfg.Source))
+		cloneAuthCfg := authCfg
+		cloneAuthCfg.Platform = ""
+		_, err = gitpkg.CloneOrInit(cfg.Source, sourceDir, cloneAuthCfg)
+		if err != nil {
+			return err
+		}
+		src = filepath.Join(sourceDir, cfg.Path)
+	}
+
+	if action == "local" {
+		if !cfg.TargetLocal {
+			return fmt.Errorf("cannot use action=local with remote target: use --target-local for local repository path")
+		}
+		logging.DebugAttrs(ctx, "Using local target repository", slog.String("target", cfg.Target))
+		var err error
+		repo, err = git.PlainOpen(cfg.Target)
+		if err != nil {
+			return err
+		}
+		worktreeDir = cfg.Target
+	} else {
+		if cfg.TargetLocal {
+			var err error
+			repo, err = git.PlainOpen(cfg.Target)
+			if err != nil {
+				return err
+			}
+			worktreeDir = cfg.Target
+		} else {
+			targetDir, err := os.MkdirTemp("", "repomover-target-*")
+			if err != nil {
+				return err
+			}
+			cleanup = append(cleanup, func() { _ = os.RemoveAll(targetDir) })
+			logging.DebugAttrs(ctx, "Cloning target repository", slog.String("target", cfg.Target))
+			cloneAuthCfg := authCfg
+			cloneAuthCfg.Platform = ""
+			repo, err = gitpkg.CloneOrInit(cfg.Target, targetDir, cloneAuthCfg)
+			if err != nil {
+				return err
+			}
+			worktreeDir = targetDir
+		}
+	}
+
+	dstPath := cfg.DestPath
+	if dstPath == "" {
+		dstPath = cfg.Path
+	}
+	dst := filepath.Join(worktreeDir, dstPath)
+
+	logging.DebugAttrs(
+		ctx,
+		"Sync started",
+		slog.String("sourcePath", src),
+		slog.String("destinationPath", dst),
+		slog.Bool("incremental", cfg.Incremental),
+	)
+
+	if _, err := os.Stat(src); os.IsNotExist(err) {
+		entries, listErr := os.ReadDir(filepath.Dir(src))
+		if listErr == nil {
+			names := make([]string, 0, len(entries))
+			for _, e := range entries {
+				names = append(names, e.Name())
+			}
+			return fmt.Errorf("source path does not exist: %s\navailable entries: %v", src, names)
+		}
+		return fmt.Errorf("source path does not exist: %s", src)
+	} else if err != nil {
+		return err
+	}
+
+	if cfg.DryRun {
+		logging.DebugAttrs(ctx, "Dry run validation complete", slog.String("sourcePath", src), slog.String("destinationPath", dst))
+		fmt.Fprintf(os.Stdout, "✓ Validation successful\n  Source: %s\n  Destination: %s\n", src, dst)
+		return nil
+	}
+
+	if action == "pr" {
+		logging.DebugCtx(ctx, "Creating branch for PR")
+		err := gitpkg.CreateBranch(repo, "repomover-sync")
+		if err != nil {
+			return err
+		}
+	}
+
+	var err error
+	if cfg.Incremental {
+		err = fs.SyncPath(src, dst)
+	} else {
+		err = fs.CopyPath(src, dst)
+	}
+	if err != nil {
+		return err
+	}
+
+	hasChanges, err := gitpkg.HasChanges(repo)
+	if err != nil {
+		return err
+	}
+
+	if !hasChanges {
+		logging.DebugCtx(ctx, "No changes detected")
+		return nil
+	}
+
+	if action == "local" {
+		logging.InfoAttrs(ctx, "Changes saved locally", slog.String("destinationPath", dst))
+		fmt.Fprintln(os.Stdout, "✓ Synced files to", dst)
+		return nil
+	}
+
+	logging.DebugCtx(ctx, "Creating commit")
+	err = gitpkg.Commit(repo, "repomover sync", dstPath)
+	if err != nil {
+		return err
+	}
+
+	if action == "commit" {
+		logging.DebugCtx(ctx, "Pushing changes")
+		err := gitpkg.Push(ctx, repo, authCfg)
+		if err == nil {
+			fmt.Fprintln(os.Stdout, "✓ Changes committed and pushed")
+		}
+		return err
+	} else if action == "pr" {
+		logging.DebugCtx(ctx, "Pushing changes before PR")
+		err = gitpkg.Push(ctx, repo, authCfg)
+		if err != nil {
+			return err
+		}
+
+		logging.InfoCtx(ctx, "Creating pull request")
+		err = gitpkg.CreatePR(ctx, repo, cfg.Platform, cfg.Token)
+		if err == nil {
+			fmt.Fprintln(os.Stdout, "✓ Pull request created: repomover-sync -> main")
+		}
+		return err
+	}
+
+	return nil
+}
+
+func detectPlatform(url string) string {
+	raw := strings.ToLower(strings.TrimSpace(url))
+
+	if strings.Contains(raw, "@") && strings.Contains(raw, ":") && !strings.Contains(raw, "://") {
+		parts := strings.SplitN(raw, "@", 2)
+		if len(parts) == 2 {
+			hostAndPath := strings.SplitN(parts[1], ":", 2)
+			if len(hostAndPath) == 2 {
+				host := hostAndPath[0]
+				if strings.Contains(host, "gitlab") {
+					return "gitlab"
+				}
+				if strings.Contains(host, "github") {
+					return "github"
+				}
+			}
+		}
+	}
+	parsed, err := neturl.Parse(raw)
+	if err == nil {
+		host := strings.ToLower(parsed.Host)
+		if strings.Contains(host, "gitlab") {
+			return "gitlab"
+		}
+		if strings.Contains(host, "github") {
+			return "github"
+		}
+	}
+
+	if strings.Contains(raw, "gitlab") {
+		return "gitlab"
+	}
+	return "github"
+}
