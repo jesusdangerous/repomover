@@ -46,7 +46,6 @@ func CreatePR(ctx context.Context, repo *git.Repository, platform string, token 
 		}
 	}
 
-	// Resolve current branch via go-git.
 	head, err := repo.Head()
 	if err != nil {
 		return err
@@ -156,7 +155,6 @@ func getRemoteURL(repo *git.Repository) (string, error) {
 func parseOwnerRepo(remoteURL string) (string, string, error) {
 	trimmed := strings.TrimSpace(strings.TrimSuffix(remoteURL, ".git"))
 
-	// SSH short syntax: git@host:owner/repo
 	if strings.Contains(trimmed, "@") && strings.Contains(trimmed, ":") && !strings.Contains(trimmed, "://") {
 		parts := strings.SplitN(trimmed, ":", 2)
 		if len(parts) != 2 {

@@ -133,7 +133,6 @@ func Run(cfg Config) error {
 	}
 
 	if _, err := os.Stat(src); os.IsNotExist(err) {
-		// Help the user by listing top-level entries in the source repo
 		entries, listErr := os.ReadDir(filepath.Dir(src))
 		if listErr == nil {
 			names := make([]string, 0, len(entries))
@@ -192,7 +191,6 @@ func Run(cfg Config) error {
 func detectPlatform(url string) string {
 	raw := strings.ToLower(strings.TrimSpace(url))
 
-	// SSH short syntax: git@host:owner/repo(.git)
 	if strings.Contains(raw, "@") && strings.Contains(raw, ":") && !strings.Contains(raw, "://") {
 		parts := strings.SplitN(raw, "@", 2)
 		if len(parts) == 2 {
