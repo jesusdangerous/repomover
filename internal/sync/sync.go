@@ -57,12 +57,14 @@ func Run(cfg Config) error {
 		return fmt.Errorf("unsupported action: %s", action)
 	}
 
-	if strings.TrimSpace(cfg.Platform) == "" {
-		cfg.Platform = detectPlatform(cfg.Target)
-	}
+	if action != "local" {
+		if strings.TrimSpace(cfg.Platform) == "" {
+			cfg.Platform = detectPlatform(cfg.Target)
+		}
 
-	if cfg.Platform != "github" && cfg.Platform != "gitlab" {
-		return fmt.Errorf("unsupported platform: %s", cfg.Platform)
+		if cfg.Platform != "github" && cfg.Platform != "gitlab" {
+			return fmt.Errorf("unsupported platform: %s", cfg.Platform)
+		}
 	}
 
 	var src string
@@ -127,11 +129,6 @@ func Run(cfg Config) error {
 		slog.Bool("incremental", cfg.Incremental),
 	)
 
-	if cfg.DryRun {
-		logging.InfoAttrs(ctx, "Dry run completed", slog.String("sourcePath", src), slog.String("destinationPath", dst))
-		return nil
-	}
-
 	if _, err := os.Stat(src); os.IsNotExist(err) {
 		entries, listErr := os.ReadDir(filepath.Dir(src))
 		if listErr == nil {
@@ -144,6 +141,11 @@ func Run(cfg Config) error {
 		return fmt.Errorf("source path does not exist: %s", src)
 	} else if err != nil {
 		return err
+	}
+
+	if cfg.DryRun {
+		logging.InfoAttrs(ctx, "Dry run completed", slog.String("sourcePath", src), slog.String("destinationPath", dst))
+		return nil
 	}
 
 	var err error
@@ -181,6 +183,12 @@ func Run(cfg Config) error {
 		logging.InfoCtx(ctx, "Pushing changes")
 		return gitpkg.Push(ctx, repo, cfg.Platform, cfg.Token)
 	} else if action == "pr" {
+		logging.InfoCtx(ctx, "Pushing changes before PR")
+		err = gitpkg.Push(ctx, repo, cfg.Platform, cfg.Token)
+		if err != nil {
+			return err
+		}
+
 		logging.InfoCtx(ctx, "Creating pull request")
 		return gitpkg.CreatePR(ctx, repo, cfg.Platform, cfg.Token)
 	}
