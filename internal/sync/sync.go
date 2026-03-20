@@ -18,18 +18,21 @@ import (
 )
 
 type Config struct {
-	Source      string
-	Target      string
-	Path        string
-	DestPath    string
-	Commit      bool
-	DryRun      bool
-	Platform    string
-	Token       string
-	Action      string
-	Incremental bool
-	SourceLocal bool
-	TargetLocal bool
+	Source        string
+	Target        string
+	Path          string
+	DestPath      string
+	Commit        bool
+	DryRun        bool
+	Platform      string
+	Token         string
+	Action        string
+	Incremental   bool
+	SourceLocal   bool
+	TargetLocal   bool
+	SSHUser       string
+	SSHKeyPath    string
+	SSHPassphrase string
 }
 
 func Run(cfg Config) error {
@@ -57,11 +60,15 @@ func Run(cfg Config) error {
 		return fmt.Errorf("unsupported action: %s", action)
 	}
 
-	if action != "local" {
+	if action == "pr" {
 		if strings.TrimSpace(cfg.Platform) == "" {
 			cfg.Platform = detectPlatform(cfg.Target)
 		}
 
+		if cfg.Platform != "github" && cfg.Platform != "gitlab" {
+			return fmt.Errorf("unsupported platform: %s", cfg.Platform)
+		}
+	} else if strings.TrimSpace(cfg.Platform) != "" {
 		if cfg.Platform != "github" && cfg.Platform != "gitlab" {
 			return fmt.Errorf("unsupported platform: %s", cfg.Platform)
 		}
@@ -71,6 +78,13 @@ func Run(cfg Config) error {
 	var repo *git.Repository
 	var worktreeDir string
 	cleanup := make([]func(), 0)
+	authCfg := gitpkg.AuthConfig{
+		Platform:         cfg.Platform,
+		Token:            cfg.Token,
+		SSHUser:          cfg.SSHUser,
+		SSHKeyPath:       cfg.SSHKeyPath,
+		SSHKeyPassphrase: cfg.SSHPassphrase,
+	}
 	defer func() {
 		for i := len(cleanup) - 1; i >= 0; i-- {
 			cleanup[i]()
@@ -86,7 +100,9 @@ func Run(cfg Config) error {
 		}
 		cleanup = append(cleanup, func() { _ = os.RemoveAll(sourceDir) })
 		logging.InfoAttrs(ctx, "Cloning source repository", slog.String("source", cfg.Source))
-		_, err = gitpkg.CloneOrInit(cfg.Source, sourceDir)
+		cloneAuthCfg := authCfg
+		cloneAuthCfg.Platform = ""
+		_, err = gitpkg.CloneOrInit(cfg.Source, sourceDir, cloneAuthCfg)
 		if err != nil {
 			return err
 		}
@@ -108,7 +124,9 @@ func Run(cfg Config) error {
 		}
 		cleanup = append(cleanup, func() { _ = os.RemoveAll(targetDir) })
 		logging.InfoAttrs(ctx, "Cloning target repository", slog.String("target", cfg.Target))
-		repo, err = gitpkg.CloneOrInit(cfg.Target, targetDir)
+		cloneAuthCfg := authCfg
+		cloneAuthCfg.Platform = ""
+		repo, err = gitpkg.CloneOrInit(cfg.Target, targetDir, cloneAuthCfg)
 		if err != nil {
 			return err
 		}
@@ -181,10 +199,10 @@ func Run(cfg Config) error {
 
 	if action == "commit" {
 		logging.InfoCtx(ctx, "Pushing changes")
-		return gitpkg.Push(ctx, repo, cfg.Platform, cfg.Token)
+		return gitpkg.Push(ctx, repo, authCfg)
 	} else if action == "pr" {
 		logging.InfoCtx(ctx, "Pushing changes before PR")
-		err = gitpkg.Push(ctx, repo, cfg.Platform, cfg.Token)
+		err = gitpkg.Push(ctx, repo, authCfg)
 		if err != nil {
 			return err
 		}

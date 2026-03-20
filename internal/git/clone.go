@@ -9,10 +9,15 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 )
 
-func CloneOrInit(url string, dir string) (*git.Repository, error) {
+func CloneOrInit(url string, dir string, cfg AuthConfig) (*git.Repository, error) {
+	auth, _, err := authForRemote(url, cfg, false)
+	if err != nil {
+		return nil, err
+	}
 
 	repo, err := git.PlainClone(dir, false, &git.CloneOptions{
-		URL: url,
+		URL:  url,
+		Auth: auth,
 	})
 
 	if err == nil {
