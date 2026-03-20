@@ -93,7 +93,7 @@ func Logger() *slog.Logger {
 func defaultLogger(level string) *slog.Logger {
 	opts := &slog.HandlerOptions{
 		Level:     parseLevel(level),
-		AddSource: true,
+		AddSource: false,
 	}
 
 	format := strings.ToLower(strings.TrimSpace(os.Getenv("REPOMOVER_LOG_FORMAT")))
