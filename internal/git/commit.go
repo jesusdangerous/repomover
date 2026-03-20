@@ -71,8 +71,9 @@ func Commit(repo *git.Repository, message string, paths ...string) error {
 
 	_, err = w.Commit(message, &git.CommitOptions{
 		Author: &object.Signature{
-			Name: "repomover",
-			When: time.Now(),
+			Name:  "repomover",
+			Email: "bot@repomover",
+			When:  time.Now(),
 		},
 	})
 
